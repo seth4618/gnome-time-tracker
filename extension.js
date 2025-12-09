@@ -2,15 +2,20 @@
 
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 // ====== CONFIGURABLE CONSTANTS ======
 
 const INTERVAL_SECONDS = 1;  // poll interval in seconds
+const IDLE_PERIOD = 7*(INTERVAL_SECONDS/8)
+
 const LOG_PATH = GLib.build_filenamev([
     GLib.get_home_dir(),
     '.local', 'share', 'window-logger.log',
 ]);
+
+// ====== Main Class ======
 
 export default class WindowLoggerExtension extends Extension {
     constructor(metadata) {
@@ -18,11 +23,20 @@ export default class WindowLoggerExtension extends Extension {
         this._timeoutId = 0;
         this._lastSnapshotJson = null;
 
+	// track whether we are idling or not
+	this._idleState = false;
+
+	// track whether locked previously
+	this._lockedState = false;
+
         // Map: title -> hash string ("<first-ts>-<4-char-hash>")
         this._titleHashes = new Map();
 
         // Set: titles we've already *logged* with their full title
         this._seenTitles = new Set();
+
+        // Idle monitor will be set in enable()
+        this._idleMonitor = null;
     }
 
     // --- Helpers ---
@@ -122,18 +136,75 @@ export default class WindowLoggerExtension extends Extension {
         }
     }
 
+    // see whether we are idle for more than 7/8 of a period.  If so, call this an idle period.
+    // if change in idle state, return true so we force a log entry.
+    _checkIdleTime() {
+        // Idle time in seconds (keyboard/mouse inactivity)
+	// This will either be at most INTERVAL_SECONDS
+        let idleSec = 0;
+        try {
+            if (this._idleMonitor) {
+		const idleMs = this._idleMonitor.get_idletime();
+		idleSec = idleMs / 1000.0;
+            }
+        } catch (e) {
+            logError(e, 'WindowLogger: failed to get idle time');
+            idleSec = 0;
+	    return false;
+        }
+
+	const idling = (idleSec > IDLE_PERIOD) ? true : false;
+	if (this._idleState) {
+	    // we have been idling
+	    if (idling) {
+		// no change in idle state, no log necessary for idle time
+		return false;
+	    } else {
+		// now, not idling
+		this._idleState = false;
+		return true;
+	    }
+	} else {
+	    // we were active
+	    if (idling) {
+		// now we are idling
+		this._idleState = true;
+		return true;
+	    } else {
+		// we are still active
+		return false;
+	    }
+	}
+    }
+
+    _checkLocked() {
+        // Locked state (screen locked)
+        const locked = Main.screenShield ? Main.screenShield.locked : false;
+	const change = (locked != this._lockedState) ? true : false;
+	this._lockedState = locked;
+	return change;
+    }
+
     _tick() {
         try {
             const ts = this._nowUnix();
+	    let needLogging = false
+	    
+	    needLogging |= this._checkIdleTime();
+	    needLogging |= this._checkLocked();
+
             const snapshot = this._getWindowsSnapshot(ts);
             const snapshotJson = JSON.stringify(snapshot);
-
-            // Only log when something changed compared to last snapshot
             if (snapshotJson !== this._lastSnapshotJson) {
-                this._lastSnapshotJson = snapshotJson;
+		needLogging = true;
+		this._lastSnapshotJson = snapshotJson;
+	    }
 
+	    if (needLogging) {
                 const record = {
                     ts,
+                    idle: this._idleState,
+                    locked: this._lockedState,
                     windows: snapshot,
                 };
 
@@ -157,6 +228,14 @@ export default class WindowLoggerExtension extends Extension {
         this._titleHashes = new Map();
         this._seenTitles = new Set();
 
+        // Initialize idle monitor here (modern GNOME Shell pattern)
+        try {
+            this._idleMonitor = global.backend.get_core_idle_monitor();
+        } catch (e) {
+            this._idleMonitor = null;
+            logError(e, 'WindowLogger: failed to get core idle monitor');
+        }
+
         // Log a restart marker
         const restartRecord = {
             ts: this._nowUnix(),
@@ -177,15 +256,23 @@ export default class WindowLoggerExtension extends Extension {
     }
 
     disable() {
-        log('WindowLogger DISABLED');
+	log('WindowLogger DISABLED');
 
-        if (this._timeoutId !== 0) {
+	// Log a stop marker so the analyzer can see the gap reason
+	const stopRecord = {
+            ts: this._nowUnix(),
+            stopped: true,
+	};
+	this._appendLogLine(JSON.stringify(stopRecord));
+
+	if (this._timeoutId !== 0) {
             GLib.source_remove(this._timeoutId);
             this._timeoutId = 0;
-        }
+	}
 
-        this._lastSnapshotJson = null;
-        this._titleHashes = new Map();
-        this._seenTitles = new Set();
+	this._lastSnapshotJson = null;
+	this._titleHashes = new Map();
+	this._seenTitles = new Set();
+	this._idleMonitor = null;
     }
 }
