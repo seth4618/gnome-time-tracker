@@ -1,0 +1,9 @@
+{
+  "uuid": "window-logger@example.com",
+  "name": "Window Logger",
+  "description": "Logs open window titles, PIDs, and focus state when the set changes.",
+  "version": 1,
+  "shell-version": [
+      "46", "45"
+  ]
+}
