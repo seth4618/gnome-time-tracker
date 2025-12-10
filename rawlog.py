@@ -78,6 +78,7 @@ def _attribute_focus(
     for h in focused_hashes:
         entry = ensure_entry(h)
         entry["focus_seconds"] += interval
+        # focus attribution never records idle time
 
 
 def analyze(
@@ -113,6 +114,7 @@ def analyze(
                 "cmd": hash_to_cmd.get(h),
                 "activations": 0,
                 "focus_seconds": 0.0,
+                "idle_seconds": 0.0,
             }
         return stats[h]
 
@@ -271,6 +273,11 @@ def analyze(
                     _attribute_focus(idle_focused_hashes, idle_overlap, ensure_entry)
                 else:
                     total_idle += idle_overlap
+                    post_idle_focused = [h for h, focused in prev_windows.items() if focused]
+                    shared_focus = set(idle_focused_hashes) & set(post_idle_focused)
+                    for h in shared_focus:
+                        entry = ensure_entry(h)
+                        entry["idle_seconds"] += idle_overlap
 
             idle_start_ts = None
             idle_cmd = None
@@ -379,15 +386,20 @@ def main():
             reverse=True,
         )
 
-        print(f"{'Hash':<20}  {'Title':<40}  {'Cmd':<40}  {'Activations':>11}  {'Focus Time':>10}")
-        print("-" * 120)
+        print(
+            f"{'Hash':<20}  {'Title':<40}  {'Cmd':<40}  "
+            f"{'Activations':>11}  {'Focus Time':>10}  {'Idle Time':>9}"
+        )
+        print("-" * 132)
 
         for h, entry in sorted_items:
             title = entry["title"] or "<unknown>"
             cmd = entry["cmd"] or "<unknown>"
             activations = entry["activations"]
             focus_sec = entry["focus_seconds"]
+            idle_sec = entry["idle_seconds"]
             focus_hms = seconds_to_hms(focus_sec)
+            idle_hms = seconds_to_hms(idle_sec)
 
             # Truncate fields for display
             if len(title) > 40:
@@ -402,20 +414,27 @@ def main():
 
             print(
                 f"{h:<20}  {title_disp:<40}  {cmd_disp:<40}  "
-                f"{activations:>11d}  {focus_hms:>10}"
+                f"{activations:>11d}  {focus_hms:>10}  {idle_hms:>9}"
             )
 
     else:
         # --- Aggregate by cmdline (default) ---
-        agg = {}  # cmd -> { 'cmd', 'activations', 'focus_seconds' }
+        agg = {}  # cmd -> { 'cmd', 'activations', 'focus_seconds', 'idle_seconds' }
 
         for h, entry in stats.items():
             cmd = entry["cmd"] or "<unknown>"
             rec = agg.setdefault(
-                cmd, {"cmd": cmd, "activations": 0, "focus_seconds": 0.0}
+                cmd,
+                {
+                    "cmd": cmd,
+                    "activations": 0,
+                    "focus_seconds": 0.0,
+                    "idle_seconds": 0.0,
+                },
             )
             rec["activations"] += entry["activations"]
             rec["focus_seconds"] += entry["focus_seconds"]
+            rec["idle_seconds"] += entry["idle_seconds"]
 
         sorted_cmds = sorted(
             agg.values(),
@@ -423,21 +442,29 @@ def main():
             reverse=True,
         )
 
-        print(f"{'Cmd':<60}  {'Activations':>11}  {'Focus Time':>10}")
-        print("-" * 90)
+        print(
+            f"{'Cmd':<60}  {'Activations':>11}  "
+            f"{'Focus Time':>10}  {'Idle Time':>9}"
+        )
+        print("-" * 103)
 
         for rec in sorted_cmds:
             cmd = rec["cmd"]
             activations = rec["activations"]
             focus_sec = rec["focus_seconds"]
+            idle_sec = rec["idle_seconds"]
             focus_hms = seconds_to_hms(focus_sec)
+            idle_hms = seconds_to_hms(idle_sec)
 
             if len(cmd) > 60:
                 cmd_disp = cmd[:57] + "..."
             else:
                 cmd_disp = cmd
 
-            print(f"{cmd_disp:<60}  {activations:>11d}  {focus_hms:>10}")
+            print(
+                f"{cmd_disp:<60}  {activations:>11d}  "
+                f"{focus_hms:>10}  {idle_hms:>9}"
+            )
 
     print()
     print("Totals (excluding any overlapping outside the time window):")
