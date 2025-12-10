@@ -1,25 +1,20 @@
-# reload GNOME Shell extensions (Xorg: Alt+F2, type r, Enter; on Wayland you must log out/in)
+# Track acitivty under gnome with wayland
+
+Track focus on windows.  Eventually, set up focus times using 45-on/15-off method.
 
 # list extensions to make sure it’s seen
+
 gnome-extensions list | grep window-logger
 
 # enable it
+
 gnome-extensions enable window-logger@example.com
 
-# analyze
+# check that it is ok:
 
-Lets update the python script to analyse the log.  The log remains the same with the addition of 
+gnome-extensions info window-logger@example.com
 
-- Stopped: {"ts":1765298647,"stopped":true}
-- Startup: {"ts":integer,"restart":true}
-- Change of state: {"ts":integer,"idle":boolean,"locked":boolean,"windows":array of objects}
-  - if the system has entered the idle state since the last log line, idle: true
-  - if the system has entered the locked state since the last log line, locked: true
-  - the window objects have two forms: 
-	- {"pid":integer,"focused":true,"title":window title,"hash":"<ts>-<4 char hash>"}
-    - {"pid":integer,"focused":boolean,"hash":"<ts>-<4 char hash>"}
-	
-I would like to enhance the previous script you wrote for me to NOT include idle, stopped, or locked time in a window's cumulative time.
-In addition a report indicating total idle time, total stopped time, and total locked time at the end of the table describing the windows.
+# reloading under wayland
 
+you have to logout/login to reload.
 
