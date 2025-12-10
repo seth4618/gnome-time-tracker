@@ -256,6 +256,11 @@ def print_summary_table(durations_by_cmd: Dict[str, List[float]]) -> bool:
     headers = ["Command", "Count", "Mean (s)", "Median (s)", "25% (s)", "75% (s)"]
     rows = []
 
+    def fmt_num(value: float) -> str:
+        """Format a numeric value with one decimal place."""
+
+        return f"{value:7.1f}"
+
     for cmd in sorted(durations_by_cmd.keys()):
         durations = sorted(durations_by_cmd[cmd])
         count = len(durations)
@@ -274,10 +279,10 @@ def print_summary_table(durations_by_cmd: Dict[str, List[float]]) -> bool:
             [
                 cmd,
                 str(count),
-                f"{mean_val:.2f}",
-                f"{median_val:.2f}",
-                f"{q1:.2f}",
-                f"{q3:.2f}",
+                fmt_num(mean_val),
+                fmt_num(median_val),
+                fmt_num(q1),
+                fmt_num(q3),
             ]
         )
 
@@ -287,7 +292,13 @@ def print_summary_table(durations_by_cmd: Dict[str, List[float]]) -> bool:
             col_widths[idx] = max(col_widths[idx], len(cell))
 
     def format_row(row_vals):
-        return "  ".join(val.ljust(col_widths[idx]) for idx, val in enumerate(row_vals))
+        formatted_cells = []
+        for idx, val in enumerate(row_vals):
+            if idx == 0:
+                formatted_cells.append(val.ljust(col_widths[idx]))
+            else:
+                formatted_cells.append(val.rjust(col_widths[idx]))
+        return "  ".join(formatted_cells)
 
     print(format_row(headers))
     print(format_row(["-" * w for w in col_widths]))
