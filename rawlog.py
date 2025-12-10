@@ -5,6 +5,7 @@ import os
 import sys
 import time
 from datetime import datetime
+from typing import Dict, Iterable, Optional
 
 
 def parse_time_arg(s: str) -> float:
@@ -53,7 +54,38 @@ def load_log(path: str):
             yield rec
 
 
-def analyze(log_path: str, t_start: float, t_end: float):
+def load_cutoffs(path: Optional[str]) -> Dict[str, float]:
+    if not path:
+        return {}
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    cutoffs: Dict[str, float] = {}
+    for k, v in (data or {}).items():
+        try:
+            cutoffs[k] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return cutoffs
+
+
+def _attribute_focus(
+    focused_hashes: Iterable[str],
+    interval: float,
+    ensure_entry,
+):
+    for h in focused_hashes:
+        entry = ensure_entry(h)
+        entry["focus_seconds"] += interval
+
+
+def analyze(
+    log_path: str,
+    t_start: float,
+    t_end: float,
+    cutoffs: Optional[Dict[str, float]] = None,
+):
     """
     Analyze the log file between [t_start, t_end] (inclusive).
 
@@ -95,6 +127,14 @@ def analyze(log_path: str, t_start: float, t_end: float):
     total_locked = 0.0
     total_stopped = 0.0
 
+    cutoffs = cutoffs or {}
+
+    idle_start_ts: Optional[float] = None
+    idle_cmd: Optional[str] = None
+    idle_focused_hashes: Iterable[str] = []
+    idle_overlap = 0.0
+    idle_duration = 0.0
+
     # Iterate records in chronological order (log is append-only)
     for rec in load_log(log_path):
         ts = rec.get("ts")
@@ -115,20 +155,33 @@ def analyze(log_path: str, t_start: float, t_end: float):
                 overlap_end = min(seg_end, t_end)
                 interval = max(0.0, overlap_end - overlap_start)
 
-            if interval > 0:
-                if not extension_running:
+            if not extension_running:
+                if interval > 0:
                     total_stopped += interval
-                elif locked:
+            elif locked:
+                if interval > 0:
                     total_locked += interval
-                elif idle:
-                    total_idle += interval
-                else:
-                    # Active time: attribute to focused windows in prev_windows
-                    for h, focused in prev_windows.items():
-                        if not focused:
-                            continue
-                        entry = ensure_entry(h)
-                        entry["focus_seconds"] += interval
+            elif idle:
+                if idle_start_ts is None:
+                    idle_start_ts = seg_start
+                    idle_cmd = None
+                    idle_focused_hashes = [h for h, f in prev_windows.items() if f]
+                    idle_overlap = 0.0
+                    idle_duration = 0.0
+                idle_duration += seg_end - seg_start
+                if interval > 0:
+                    idle_overlap += interval
+            else:
+                if interval > 0:
+                    _attribute_focus(
+                        [h for h, focused in prev_windows.items() if focused],
+                        interval,
+                        ensure_entry,
+                    )
+
+        # Capture previous state for transition detection
+        prev_idle_state = idle
+        prev_windows_snapshot = prev_windows
 
         # 2) Update state based on THIS record
 
@@ -187,6 +240,45 @@ def analyze(log_path: str, t_start: float, t_end: float):
 
             prev_windows = state
 
+        # Detect idle transitions after state update
+        # Transitions
+        if not prev_idle_state and idle and extension_running and not locked:
+            idle_start_ts = ts
+            focused_cmds = [
+                hash_to_cmd.get(h)
+                for h, focused in prev_windows_snapshot.items()
+                if focused and hash_to_cmd.get(h)
+            ]
+            idle_cmd = focused_cmds[0] if focused_cmds else None
+            idle_focused_hashes = [
+                h for h, focused in prev_windows_snapshot.items() if focused
+            ]
+            idle_overlap = 0.0
+            idle_duration = 0.0
+
+        if prev_idle_state and (not idle or not extension_running or locked):
+            if idle_start_ts is not None:
+                cutoff = cutoffs.get(idle_cmd, 0.0)
+                treat_as_active = (
+                    idle_cmd is not None
+                    and idle_duration < cutoff
+                    and extension_running
+                    and not locked
+                    and not idle
+                )
+
+                if treat_as_active:
+                    _attribute_focus(idle_focused_hashes, idle_overlap, ensure_entry)
+                else:
+                    total_idle += idle_overlap
+
+            idle_start_ts = None
+            idle_cmd = None
+            idle_focused_hashes = []
+            idle_overlap = 0.0
+            idle_duration = 0.0
+
+
         # 3) Move forward in time
         prev_ts = ts
 
@@ -236,6 +328,15 @@ def main():
         help="Report per window (title/hash) instead of aggregating by cmdline.",
     )
 
+    parser.add_argument(
+        "-c",
+        "--cutoffs",
+        help=(
+            "Optional path to a JSON file mapping command paths to minimum idle "
+            "durations (seconds) that should be treated as idle."
+        ),
+    )
+
     args = parser.parse_args()
 
     now = time.time()
@@ -255,7 +356,11 @@ def main():
         print(f"Log file not found: {args.log}", file=sys.stderr)
         sys.exit(1)
 
-    stats, hash_to_title, hash_to_cmd, totals = analyze(args.log, t_start, t_end)
+    cutoffs = load_cutoffs(args.cutoffs)
+
+    stats, hash_to_title, hash_to_cmd, totals = analyze(
+        args.log, t_start, t_end, cutoffs=cutoffs
+    )
 
     total_time = totals["idle"] + totals["locked"] + totals["stopped"]
     total_focus = sum(e["focus_seconds"] for e in stats.values())
