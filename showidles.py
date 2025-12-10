@@ -21,6 +21,27 @@ import matplotlib
 
 
 DEFAULT_LOG_PATH = os.path.expanduser("~/.local/share/window-logger.log")
+DEFAULT_CUTOFF_PATH = os.path.expanduser("~/.local/share/appmap.json")
+
+
+def load_cutoffs(path: str) -> Dict[str, float]:
+    """Load a mapping of command -> minimum idle duration from JSON.
+
+    If the file cannot be read or parsed, an error is raised so the caller can
+    surface it to the user.
+    """
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    cutoffs: Dict[str, float] = {}
+    for cmd, seconds in data.items():
+        try:
+            cutoffs[str(cmd)] = float(seconds)
+        except (TypeError, ValueError):
+            raise ValueError(f"Invalid cutoff value for command '{cmd}': {seconds}")
+
+    return cutoffs
 
 
 def parse_time_arg(s: str) -> float:
@@ -58,6 +79,7 @@ def extract_idle_durations(
     t_start: float,
     t_end: float,
     include_switches: bool = False,
+    cutoffs: Optional[Dict[str, float]] = None,
 ) -> Dict[str, List[float]]:
     """
     Return a mapping of command -> list of idle durations (seconds).
@@ -67,6 +89,10 @@ def extract_idle_durations(
     command focused before idling matches the command focused after resuming.
     If ``include_switches`` is True, idle periods are counted even when the
     focus changes during the idle period.
+    If ``cutoffs`` is provided, it should map command paths to minimum idle
+    durations (seconds) that should be treated as idle time. Idle periods that
+    are shorter than the configured cutoff for their command are ignored so the
+    brief pause counts as active time.
     """
 
     hash_to_cmd: Dict[str, str] = {}
@@ -146,7 +172,11 @@ def extract_idle_durations(
                                 include = False
 
                         if include:
-                            durations_by_cmd.setdefault(idle_cmd, []).append(duration)
+                            cutoff = (cutoffs or {}).get(idle_cmd, 0)
+                            if duration >= cutoff:
+                                durations_by_cmd.setdefault(idle_cmd, []).append(
+                                    duration
+                                )
 
                 idle_start_ts = None
                 idle_cmd = None
@@ -279,6 +309,15 @@ def main():
         default=DEFAULT_LOG_PATH,
         help=f"Path to log file (default: {DEFAULT_LOG_PATH})",
     )
+    parser.add_argument(
+        "-c",
+        "--cutoff-file",
+        help=(
+            "Path to a JSON file mapping command paths to minimum idle durations "
+            "(seconds). Idle periods shorter than the cutoff for the focused "
+            "command are treated as active time."
+        ),
+    )
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -326,11 +365,23 @@ def main():
         print(f"Log file not found: {args.log}", file=sys.stderr)
         sys.exit(1)
 
+    cutoffs: Optional[Dict[str, float]] = None
+    if args.cutoff_file:
+        try:
+            cutoffs = load_cutoffs(args.cutoff_file)
+        except FileNotFoundError:
+            print(f"Cutoff file not found: {args.cutoff_file}", file=sys.stderr)
+            sys.exit(1)
+        except (OSError, ValueError) as exc:
+            print(f"Failed to read cutoff file: {exc}", file=sys.stderr)
+            sys.exit(1)
+
     durations_by_cmd = extract_idle_durations(
         args.log,
         t_start,
         t_end,
         include_switches=args.include_switches,
+        cutoffs=cutoffs,
     )
 
     has_data = print_summary_table(durations_by_cmd)
