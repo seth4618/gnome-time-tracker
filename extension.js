@@ -15,6 +15,30 @@ const LOG_PATH = GLib.build_filenamev([
     '.local', 'share', 'window-logger.log',
 ]);
 
+// ====== Helper Functions ======
+
+function _getCmdlineFromPid(pid) {
+    if (!pid)
+        return null;
+
+    const path = `/proc/${pid}/cmdline`;
+    try {
+        const [ok, contents] = GLib.file_get_contents(path);
+        if (ok && contents) {
+	    // contents is a Uint8Array, convert to string and strip nulls
+	    const raw = contents.toString();
+	    const cleaned = raw.replace(/\u0000+/g, ' ').trim();
+	    return cleaned.length ? cleaned : null;
+        }
+    } catch (e) {
+        // process probably exited
+    }
+
+    return null;
+}
+
+
+
 // ====== Main Class ======
 
 export default class WindowLoggerExtension extends Extension {
@@ -81,11 +105,13 @@ export default class WindowLoggerExtension extends Extension {
             const title = metaWin.get_title() || '';
             const pid = metaWin.get_pid ? metaWin.get_pid() : null;
             const focused = metaWin.has_focus ? metaWin.has_focus() : false;
+	    const cmdline = _getCmdlineFromPid(pid);
 
             const hash = this._getOrCreateTitleHash(title, ts);
 
             const winRecord = {
                 pid,
+		cmd: _getCmdlineFromPid(pid),
                 focused,
             };
 
