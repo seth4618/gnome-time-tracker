@@ -206,7 +206,16 @@ def analyze(
             idle = bool(rec.get("idle", False))
             locked = bool(rec.get("locked", False))
 
-            state = {}
+            full_snapshot = bool(rec.get("full", True))
+            focus_only = bool(rec.get("focusOnly", False))
+
+            state = {} if full_snapshot else dict(prev_windows)
+
+            if focus_only:
+                # Focus change only: clear previous focus flags, keep membership
+                for h in state.keys():
+                    state[h] = False
+
             windows = rec.get("windows") or []
             for w in windows:
                 h = w.get("hash")
@@ -373,7 +382,7 @@ def main():
         print("No data in the specified time range.")
         return
 
-    print(f"Time window: {t_start:.0f} – {t_end:.0f} (unix timestamps)")
+    print(f"Time window: {t_start:.0f} – {t_end:.0f} (unix timestamps) Or {datetime.fromtimestamp(t_start).isoformat()}--{datetime.fromtimestamp(t_end).isoformat()}")
     print()
 
     if args.window:

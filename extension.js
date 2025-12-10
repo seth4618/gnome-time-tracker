@@ -45,13 +45,16 @@ export default class WindowLoggerExtension extends Extension {
     constructor(metadata) {
         super(metadata);
         this._timeoutId = 0;
-        this._lastSnapshotJson = null;
 
 	// track whether we are idling or not
-	this._idleState = false;
+        this._idleState = false;
 
-	// track whether locked previously
-	this._lockedState = false;
+        // track whether locked previously
+        this._lockedState = false;
+
+        // track window membership and focus changes
+        this._lastWindowHashes = new Set();
+        this._lastFocusedHash = null;
 
         // Map: title -> hash string ("<first-ts>-<4-char-hash>")
         this._titleHashes = new Map();
@@ -96,6 +99,8 @@ export default class WindowLoggerExtension extends Extension {
     _getWindowsSnapshot(ts) {
         const actors = global.get_window_actors();
         const windows = [];
+        const hashes = new Set();
+        let focusedHash = null;
 
         for (const actor of actors) {
             const metaWin = actor.meta_window;
@@ -115,8 +120,12 @@ export default class WindowLoggerExtension extends Extension {
                 cmd: cmdline,
             };
 
-            if (focused)
+            hashes.add(hash);
+
+            if (focused) {
                 winRecord.focused = true;
+                focusedHash = hash;
+            }
 
             if (!this._seenTitles.has(title)) {
                 // First time we log this title in this session:
@@ -131,7 +140,19 @@ export default class WindowLoggerExtension extends Extension {
             windows.push(winRecord);
         }
 
-        return windows;
+        return { windows, hashes, focusedHash };
+    }
+
+    _setsDiffer(a, b) {
+        if (a.size !== b.size)
+            return true;
+
+        for (const v of a) {
+            if (!b.has(v))
+                return true;
+        }
+
+        return false;
     }
 
     _ensureLogDir() {
@@ -217,22 +238,21 @@ export default class WindowLoggerExtension extends Extension {
     _tick() {
         try {
             const ts = this._nowUnix();
-	    let needLogging = false
-	    
-	    needLogging |= this._checkIdleTime();
-	    needLogging |= this._checkLocked();
+            let needLogging = false;
 
-            const snapshot = this._getWindowsSnapshot(ts);
-            const snapshotJson = JSON.stringify(snapshot);
-            if (snapshotJson !== this._lastSnapshotJson) {
-		needLogging = true;
-		this._lastSnapshotJson = snapshotJson;
-	    }
+            const idleChanged = this._checkIdleTime();
+            const lockedChanged = this._checkLocked();
+
+            const { windows, hashes, focusedHash } = this._getWindowsSnapshot(ts);
+
+            const windowSetChanged = this._setsDiffer(hashes, this._lastWindowHashes);
+            const focusChanged = focusedHash !== this._lastFocusedHash;
+
+            needLogging |= idleChanged || lockedChanged || windowSetChanged || focusChanged;
 
             if (needLogging) {
                 const record = {
                     ts,
-                    windows: snapshot,
                 };
 
                 if (this._idleState)
@@ -240,6 +260,19 @@ export default class WindowLoggerExtension extends Extension {
 
                 if (this._lockedState)
                     record.locked = true;
+
+                if (windowSetChanged) {
+                    record.full = true;
+                    record.windows = windows;
+                    this._lastWindowHashes = hashes;
+                } else if (focusChanged) {
+                    record.focusOnly = true;
+                    record.full = false;
+                    const focusedWindow = windows.find(w => w.focused) || null;
+                    record.windows = focusedWindow ? [focusedWindow] : [];
+                }
+
+                this._lastFocusedHash = focusedHash;
 
                 const line = JSON.stringify(record);
                 this._appendLogLine(line);
@@ -257,9 +290,10 @@ export default class WindowLoggerExtension extends Extension {
     enable() {
         log('WindowLogger ENABLED');
 
-        this._lastSnapshotJson = null;
         this._titleHashes = new Map();
         this._seenTitles = new Set();
+        this._lastWindowHashes = new Set();
+        this._lastFocusedHash = null;
 
         // Initialize idle monitor here (modern GNOME Shell pattern)
         try {
@@ -303,9 +337,8 @@ export default class WindowLoggerExtension extends Extension {
             this._timeoutId = 0;
 	}
 
-	this._lastSnapshotJson = null;
-	this._titleHashes = new Map();
-	this._seenTitles = new Set();
-	this._idleMonitor = null;
+        this._titleHashes = new Map();
+        this._seenTitles = new Set();
+        this._idleMonitor = null;
     }
 }
