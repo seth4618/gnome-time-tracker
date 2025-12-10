@@ -128,8 +128,8 @@ def extract_idle_durations(
             windows_new = {}
         elif "windows" in rec:
             new_extension_running = True
-            new_idle = bool(rec.get("idle", new_idle))
-            new_locked = bool(rec.get("locked", new_locked))
+            new_idle = bool(rec.get("idle", False))
+            new_locked = bool(rec.get("locked", False))
             windows_new = {}
 
             for w in rec.get("windows") or []:

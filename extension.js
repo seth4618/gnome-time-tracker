@@ -105,15 +105,18 @@ export default class WindowLoggerExtension extends Extension {
             const title = metaWin.get_title() || '';
             const pid = metaWin.get_pid ? metaWin.get_pid() : null;
             const focused = metaWin.has_focus ? metaWin.has_focus() : false;
-	    const cmdline = _getCmdlineFromPid(pid);
+
+            const cmdline = _getCmdlineFromPid(pid);
 
             const hash = this._getOrCreateTitleHash(title, ts);
 
             const winRecord = {
                 pid,
-		cmd: _getCmdlineFromPid(pid),
-                focused,
+                cmd: cmdline,
             };
+
+            if (focused)
+                winRecord.focused = true;
 
             if (!this._seenTitles.has(title)) {
                 // First time we log this title in this session:
@@ -226,13 +229,17 @@ export default class WindowLoggerExtension extends Extension {
 		this._lastSnapshotJson = snapshotJson;
 	    }
 
-	    if (needLogging) {
+            if (needLogging) {
                 const record = {
                     ts,
-                    idle: this._idleState,
-                    locked: this._lockedState,
                     windows: snapshot,
                 };
+
+                if (this._idleState)
+                    record.idle = true;
+
+                if (this._lockedState)
+                    record.locked = true;
 
                 const line = JSON.stringify(record);
                 this._appendLogLine(line);

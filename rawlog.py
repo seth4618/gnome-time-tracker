@@ -203,10 +203,8 @@ def analyze(
             # A normal snapshot: windows/idle/locked state
             extension_running = True
             # idle/locked are booleans indicating current state
-            if "idle" in rec:
-                idle = bool(rec["idle"])
-            if "locked" in rec:
-                locked = bool(rec["locked"])
+            idle = bool(rec.get("idle", False))
+            locked = bool(rec.get("locked", False))
 
             state = {}
             windows = rec.get("windows") or []
