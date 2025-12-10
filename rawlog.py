@@ -60,13 +60,16 @@ def analyze(log_path: str, t_start: float, t_end: float):
     Returns:
         stats: dict[hash] = {
             'title': str or None,
+            'cmd': str or None,
             'activations': int,
             'focus_seconds': float,
         }
         hash_to_title: dict[hash] = title
+        hash_to_cmd: dict[hash] = cmd
         totals: dict with 'idle', 'locked', 'stopped' (seconds)
     """
     hash_to_title = {}
+    hash_to_cmd = {}
 
     # Stats per window hash
     stats = {}
@@ -75,6 +78,7 @@ def analyze(log_path: str, t_start: float, t_end: float):
         if h not in stats:
             stats[h] = {
                 "title": hash_to_title.get(h),
+                "cmd": hash_to_cmd.get(h),
                 "activations": 0,
                 "focus_seconds": 0.0,
             }
@@ -166,6 +170,13 @@ def analyze(log_path: str, t_start: float, t_end: float):
                     if h in stats:
                         stats[h]["title"] = title
 
+                # Learn cmd if present
+                cmd = w.get("cmd")
+                if cmd and h not in hash_to_cmd:
+                    hash_to_cmd[h] = cmd
+                    if h in stats:
+                        stats[h]["cmd"] = cmd
+
             # Count activations at this instant (if inside time window)
             if t_start <= ts <= t_end:
                 prev_focused = {h for h, f in prev_windows.items() if f}
@@ -185,14 +196,14 @@ def analyze(log_path: str, t_start: float, t_end: float):
         "stopped": total_stopped,
     }
 
-    return stats, hash_to_title, totals
+    return stats, hash_to_title, hash_to_cmd, totals
 
 
 def main():
     parser = argparse.ArgumentParser(
         description=(
             "Analyze window-logger log to compute activations and focus time "
-            "per window, excluding idle/locked/stopped time."
+            "per window or per cmdline, excluding idle/locked/stopped time."
         )
     )
     parser.add_argument(
@@ -213,8 +224,16 @@ def main():
         metavar=("START", "END"),
         help=(
             "Analyze between START and END times. "
-            "Each can be a unix timestamp or ISO datetime (e.g. 2025-12-08T10:23:00)."
+            "Each can be a unix timestamp or ISO datetime "
+            "(e.g. 2025-12-08T10:23:00)."
         ),
+    )
+
+    parser.add_argument(
+        "-w",
+        "--window",
+        action="store_true",
+        help="Report per window (title/hash) instead of aggregating by cmdline.",
     )
 
     args = parser.parse_args()
@@ -236,40 +255,84 @@ def main():
         print(f"Log file not found: {args.log}", file=sys.stderr)
         sys.exit(1)
 
-    stats, hash_to_title, totals = analyze(args.log, t_start, t_end)
+    stats, hash_to_title, hash_to_cmd, totals = analyze(args.log, t_start, t_end)
 
-    # If no stats and no time, bail early
     total_time = totals["idle"] + totals["locked"] + totals["stopped"]
     total_focus = sum(e["focus_seconds"] for e in stats.values())
     if not stats and total_time == 0 and total_focus == 0:
         print("No data in the specified time range.")
         return
 
-    # Sort by total focus time, descending
-    sorted_items = sorted(
-        stats.items(),
-        key=lambda kv: kv[1]["focus_seconds"],
-        reverse=True,
-    )
-
     print(f"Time window: {t_start:.0f} – {t_end:.0f} (unix timestamps)")
     print()
-    print(f"{'Hash':<20}  {'Title':<40}  {'Activations':>11}  {'Focus Time':>10}")
-    print("-" * 90)
 
-    for h, entry in sorted_items:
-        title = entry["title"] or "<unknown>"
-        activations = entry["activations"]
-        focus_sec = entry["focus_seconds"]
-        focus_hms = seconds_to_hms(focus_sec)
+    if args.window:
+        # --- Per-window report (title/hash) ---
+        sorted_items = sorted(
+            stats.items(),
+            key=lambda kv: kv[1]["focus_seconds"],
+            reverse=True,
+        )
 
-        # Truncate title for display
-        if len(title) > 40:
-            title_disp = title[:37] + "..."
-        else:
-            title_disp = title
+        print(f"{'Hash':<20}  {'Title':<40}  {'Cmd':<40}  {'Activations':>11}  {'Focus Time':>10}")
+        print("-" * 120)
 
-        print(f"{h:<20}  {title_disp:<40}  {activations:>11d}  {focus_hms:>10}")
+        for h, entry in sorted_items:
+            title = entry["title"] or "<unknown>"
+            cmd = entry["cmd"] or "<unknown>"
+            activations = entry["activations"]
+            focus_sec = entry["focus_seconds"]
+            focus_hms = seconds_to_hms(focus_sec)
+
+            # Truncate fields for display
+            if len(title) > 40:
+                title_disp = title[:37] + "..."
+            else:
+                title_disp = title
+
+            if len(cmd) > 40:
+                cmd_disp = cmd[:37] + "..."
+            else:
+                cmd_disp = cmd
+
+            print(
+                f"{h:<20}  {title_disp:<40}  {cmd_disp:<40}  "
+                f"{activations:>11d}  {focus_hms:>10}"
+            )
+
+    else:
+        # --- Aggregate by cmdline (default) ---
+        agg = {}  # cmd -> { 'cmd', 'activations', 'focus_seconds' }
+
+        for h, entry in stats.items():
+            cmd = entry["cmd"] or "<unknown>"
+            rec = agg.setdefault(
+                cmd, {"cmd": cmd, "activations": 0, "focus_seconds": 0.0}
+            )
+            rec["activations"] += entry["activations"]
+            rec["focus_seconds"] += entry["focus_seconds"]
+
+        sorted_cmds = sorted(
+            agg.values(),
+            key=lambda e: e["focus_seconds"],
+            reverse=True,
+        )
+
+        print(f"{'Cmd':<60}  {'Activations':>11}  {'Focus Time':>10}")
+        print("-" * 90)
+
+        for rec in sorted_cmds:
+            cmd = rec["cmd"]
+            activations = rec["activations"]
+            focus_sec = rec["focus_seconds"]
+            focus_hms = seconds_to_hms(focus_sec)
+
+            if len(cmd) > 60:
+                cmd_disp = cmd[:57] + "..."
+            else:
+                cmd_disp = cmd
+
+            print(f"{cmd_disp:<60}  {activations:>11d}  {focus_hms:>10}")
 
     print()
     print("Totals (excluding any overlapping outside the time window):")
