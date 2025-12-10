@@ -130,7 +130,15 @@ def extract_idle_durations(
             new_extension_running = True
             new_idle = bool(rec.get("idle", False))
             new_locked = bool(rec.get("locked", False))
-            windows_new = {}
+
+            full_snapshot = bool(rec.get("full", True))
+            focus_only = bool(rec.get("focusOnly", False))
+
+            windows_new = {} if full_snapshot else dict(prev_windows)
+
+            if focus_only:
+                for h, info in windows_new.items():
+                    windows_new[h] = {**info, "focused": False}
 
             for w in rec.get("windows") or []:
                 h = w.get("hash")
@@ -138,11 +146,12 @@ def extract_idle_durations(
                     continue
                 focused = bool(w.get("focused", False))
                 cmd = w.get("cmd")
-                if cmd and h not in hash_to_cmd:
-                    hash_to_cmd[h] = cmd
+                if cmd:
+                    hash_to_cmd.setdefault(h, cmd)
+                known_cmd = cmd or hash_to_cmd.get(h)
                 windows_new[h] = {
                     "focused": focused,
-                    "cmd": cmd or hash_to_cmd.get(h),
+                    "cmd": known_cmd,
                 }
 
         # If we are currently in an idle period, check if it ends at this record.
