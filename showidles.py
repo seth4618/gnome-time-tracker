@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Visualize idle durations per command using box plots.
+Summarize and visualize idle durations per command.
 
 The script reads the window-logger log, extracts idle periods, and plots
 box plots of idle durations grouped by the command that was focused when the
@@ -14,6 +14,7 @@ import os
 import sys
 import time
 from datetime import datetime
+import statistics
 from typing import Dict, List, Optional
 
 import matplotlib
@@ -212,9 +213,66 @@ def plot_boxplot(durations_by_cmd: Dict[str, List[float]], output: Optional[str]
             plt.show()
 
 
+def print_summary_table(durations_by_cmd: Dict[str, List[float]]) -> bool:
+    """Print a table summarizing idle durations per command.
+
+    Returns True when there is data to show; False otherwise.
+    """
+
+    if not durations_by_cmd:
+        print("No idle durations found for the specified time window.")
+        return False
+
+    headers = ["Command", "Count", "Mean (s)", "Median (s)", "25% (s)", "75% (s)"]
+    rows = []
+
+    for cmd in sorted(durations_by_cmd.keys()):
+        durations = sorted(durations_by_cmd[cmd])
+        count = len(durations)
+        mean_val = statistics.mean(durations)
+        median_val = statistics.median(durations)
+
+        if count >= 2:
+            q1, _, q3 = statistics.quantiles(
+                durations, n=4, method="inclusive"
+            )
+        else:
+            # With a single sample, treat both quartiles as the lone value to
+            # avoid statistics.StatisticsError while keeping the table useful.
+            q1 = q3 = durations[0]
+        rows.append(
+            [
+                cmd,
+                str(count),
+                f"{mean_val:.2f}",
+                f"{median_val:.2f}",
+                f"{q1:.2f}",
+                f"{q3:.2f}",
+            ]
+        )
+
+    col_widths = [len(header) for header in headers]
+    for row in rows:
+        for idx, cell in enumerate(row):
+            col_widths[idx] = max(col_widths[idx], len(cell))
+
+    def format_row(row_vals):
+        return "  ".join(val.ljust(col_widths[idx]) for idx, val in enumerate(row_vals))
+
+    print(format_row(headers))
+    print(format_row(["-" * w for w in col_widths]))
+    for row in rows:
+        print(format_row(row))
+
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Plot idle durations per command from the window-logger log",
+        description=(
+            "Summarize idle durations per command from the window-logger log and "
+            "plot box plots"
+        ),
     )
     parser.add_argument(
         "--log",
@@ -275,7 +333,10 @@ def main():
         include_switches=args.include_switches,
     )
 
-    plot_boxplot(durations_by_cmd, output=args.output)
+    has_data = print_summary_table(durations_by_cmd)
+    if has_data:
+        print()
+        plot_boxplot(durations_by_cmd, output=args.output)
 
 
 if __name__ == "__main__":
